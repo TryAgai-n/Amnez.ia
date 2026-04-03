@@ -14,3 +14,29 @@ Planned next steps:
 - implement read-only `amnezia-agent`
 - wire PHP UI pages to the new API
 - move client lifecycle operations from PHP into jobs + agent
+
+## Local stack
+
+`compose.yaml` defines:
+- `postgres` on `5432`
+- `api` on `8083`
+
+Bootstrap:
+
+```bash
+cp .env.example .env
+docker compose up -d postgres
+```
+
+Run API locally:
+
+```bash
+export PATH=/root/.dotnet:$PATH
+dotnet run --project src/Amnezia.Panel.Api
+```
+
+Run in Docker:
+
+```bash
+docker compose up -d --build
+```

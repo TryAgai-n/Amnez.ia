@@ -1,0 +1,45 @@
+services:
+  postgres:
+    image: postgres:17
+    container_name: amnezia-panel-dotnet-postgres
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: src/Amnezia.Panel.Api/Dockerfile
+    container_name: amnezia-panel-dotnet-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://0.0.0.0:8083
+      ConnectionStrings__PanelDatabase: ${PANEL_DATABASE_CONNECTION}
+      Agent__BaseUrl: ${AGENT_BASE_URL}
+      Agent__ApiKey: ${AGENT_API_KEY}
+    ports:
+      - "127.0.0.1:8083:8083"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  pg_data:
