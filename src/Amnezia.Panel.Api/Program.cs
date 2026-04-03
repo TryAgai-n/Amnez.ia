@@ -47,7 +47,7 @@ app.MapGet("/health/ready", async (PanelDbContext db, CancellationToken cancella
     var canConnect = await db.Database.CanConnectAsync(cancellationToken);
     return canConnect
         ? Results.Ok(new { status = "ready" })
-        : Results.Problem(statusCode: StatusCodes.Status503ServiceUnavailable, detail = "Database is not reachable.");
+        : Results.Problem(statusCode: StatusCodes.Status503ServiceUnavailable, detail: "Database is not reachable.");
 })
 .WithName("ReadyHealth");
 
