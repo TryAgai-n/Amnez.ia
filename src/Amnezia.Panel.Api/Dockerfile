@@ -2,6 +2,7 @@ FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 
 COPY ["global.json", "./"]
+COPY ["src/Amnezia.Panel.Contracts/Amnezia.Panel.Contracts.csproj", "src/Amnezia.Panel.Contracts/"]
 COPY ["src/Amnezia.Panel.Api/Amnezia.Panel.Api.csproj", "src/Amnezia.Panel.Api/"]
 RUN dotnet restore "src/Amnezia.Panel.Api/Amnezia.Panel.Api.csproj"
 

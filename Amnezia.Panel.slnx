@@ -1,5 +1,7 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/Amnezia.Agent/Amnezia.Agent.csproj" />
     <Project Path="src/Amnezia.Panel.Api/Amnezia.Panel.Api.csproj" />
+    <Project Path="src/Amnezia.Panel.Contracts/Amnezia.Panel.Contracts.csproj" />
   </Folder>
 </Solution>

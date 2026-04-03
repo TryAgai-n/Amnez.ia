@@ -2,6 +2,7 @@ using System.Text.Json;
 using Amnezia.Panel.Api.Contracts;
 using Amnezia.Panel.Api.Data;
 using Amnezia.Panel.Api.Domain;
+using Amnezia.Panel.Contracts;
 using Microsoft.EntityFrameworkCore;
 
 namespace Amnezia.Panel.Api.Services;
@@ -21,74 +22,7 @@ public sealed class ServerSyncService(
         try
         {
             var snapshot = await agentClient.GetServerSnapshotAsync(server, cancellationToken);
-            var now = DateTime.UtcNow;
-
-            server.RuntimeType = snapshot.RuntimeType;
-            server.ContainerName = snapshot.ContainerName;
-            server.ListenPort = snapshot.ListenPort;
-            server.Status = ParseServerStatus(snapshot.Status);
-            server.LastSyncedAt = now;
-            server.LastError = null;
-            server.UpdatedAt = now;
-
-            db.ServerMetrics.Add(new ServerMetric
-            {
-                ServerId = server.Id,
-                SampledAt = now,
-                CpuPercent = snapshot.CpuPercent,
-                MemoryUsedMb = snapshot.MemoryUsedMb,
-                MemoryTotalMb = snapshot.MemoryTotalMb,
-                NetworkRxKbps = snapshot.NetworkRxKbps,
-                NetworkTxKbps = snapshot.NetworkTxKbps,
-                ActiveClients = snapshot.ActiveClients,
-            });
-
-            var existingClients = server.Clients.ToDictionary(x => x.PublicKey, StringComparer.Ordinal);
-            var upserted = 0;
-
-            foreach (var remoteClient in snapshot.Clients)
-            {
-                if (!existingClients.TryGetValue(remoteClient.PublicKey, out var client))
-                {
-                    client = new VpnClient
-                    {
-                        Id = Guid.NewGuid(),
-                        ServerId = server.Id,
-                        PublicKey = remoteClient.PublicKey,
-                        CreatedAt = now,
-                    };
-
-                    db.VpnClients.Add(client);
-                    existingClients[remoteClient.PublicKey] = client;
-                }
-
-                client.Name = string.IsNullOrWhiteSpace(remoteClient.Name) ? client.Name : remoteClient.Name;
-                client.Address = remoteClient.Address;
-                client.Status = ParseClientStatus(remoteClient.Status);
-                client.BytesSent = remoteClient.BytesSent;
-                client.BytesReceived = remoteClient.BytesReceived;
-                client.LastHandshakeAt = remoteClient.LastHandshake?.UtcDateTime;
-                client.LastSyncedAt = now;
-                client.UpdatedAt = now;
-
-                db.ClientMetrics.Add(new ClientMetric
-                {
-                    Client = client,
-                    SampledAt = now,
-                    BytesSent = remoteClient.BytesSent,
-                    BytesReceived = remoteClient.BytesReceived,
-                    SpeedUpKbps = remoteClient.SpeedUpKbps,
-                    SpeedDownKbps = remoteClient.SpeedDownKbps,
-                    IsOnline = remoteClient.LastHandshake is not null &&
-                               remoteClient.LastHandshake.Value >= DateTimeOffset.UtcNow.AddMinutes(-5),
-                });
-
-                upserted++;
-            }
-
-            await db.SaveChangesAsync(cancellationToken);
-
-            return new ServerSyncResult(server.Id, upserted, snapshot.ActiveClients, now);
+            return await ApplySnapshotAsync(server, snapshot, cancellationToken);
         }
         catch (Exception ex)
         {
@@ -118,12 +52,107 @@ public sealed class ServerSyncService(
         return results;
     }
 
+    public async Task<ServerSyncResult> ApplySnapshotAsync(PanelServer server, AgentServerSnapshot snapshot, CancellationToken cancellationToken)
+    {
+        var now = DateTime.UtcNow;
+        var previousServerMetric = await db.ServerMetrics
+            .AsNoTracking()
+            .Where(x => x.ServerId == server.Id)
+            .OrderByDescending(x => x.SampledAt)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        server.RuntimeType = snapshot.RuntimeType;
+        server.ContainerName = snapshot.ContainerName;
+        server.ConfigPath = snapshot.ConfigPath;
+        server.InterfaceName = snapshot.InterfaceName;
+        server.QuickCommand = snapshot.QuickCommand;
+        server.ShowCommand = snapshot.ShowCommand;
+        server.ListenPort = snapshot.ListenPort;
+        server.VpnSubnet = snapshot.VpnSubnet;
+        server.ServerPublicKey = snapshot.ServerPublicKey;
+        server.PresharedKey = snapshot.PresharedKey;
+        server.AwgParametersJson = JsonSerializer.Serialize(snapshot.AwgParameters);
+        server.Status = ParseServerStatus(snapshot.Status);
+        server.LastSyncedAt = now;
+        server.LastError = null;
+        server.UpdatedAt = now;
+
+        db.ServerMetrics.Add(new ServerMetric
+        {
+            ServerId = server.Id,
+            SampledAt = now,
+            CpuPercent = snapshot.CpuPercent,
+            MemoryUsedMb = snapshot.MemoryUsedMb,
+            MemoryTotalMb = snapshot.MemoryTotalMb,
+            NetworkRxBytes = snapshot.NetworkRxBytes,
+            NetworkTxBytes = snapshot.NetworkTxBytes,
+            NetworkRxKbps = ComputeRateKbps(previousServerMetric?.NetworkRxBytes ?? snapshot.NetworkRxBytes, snapshot.NetworkRxBytes, previousServerMetric?.SampledAt, now),
+            NetworkTxKbps = ComputeRateKbps(previousServerMetric?.NetworkTxBytes ?? snapshot.NetworkTxBytes, snapshot.NetworkTxBytes, previousServerMetric?.SampledAt, now),
+            ActiveClients = snapshot.ActiveClients,
+        });
+
+        var existingClients = server.Clients.ToDictionary(x => x.PublicKey, StringComparer.Ordinal);
+        var upserted = 0;
+
+        foreach (var remoteClient in snapshot.Clients)
+        {
+            if (!existingClients.TryGetValue(remoteClient.PublicKey, out var client))
+            {
+                client = new VpnClient
+                {
+                    Id = Guid.NewGuid(),
+                    ServerId = server.Id,
+                    PublicKey = remoteClient.PublicKey,
+                    CreatedAt = now,
+                };
+
+                db.VpnClients.Add(client);
+                existingClients[remoteClient.PublicKey] = client;
+            }
+
+            client.Name = ResolveClientName(remoteClient, client);
+            client.Address = string.IsNullOrWhiteSpace(remoteClient.Address) ? client.Address : remoteClient.Address;
+            client.Status = ParseClientStatus(remoteClient.Status);
+            client.BytesSent = remoteClient.BytesSent;
+            client.BytesReceived = remoteClient.BytesReceived;
+            client.LastHandshakeAt = remoteClient.LastHandshake?.UtcDateTime;
+            client.LastSyncedAt = now;
+            client.UpdatedAt = now;
+
+            var previousClientMetric = await db.ClientMetrics
+                .AsNoTracking()
+                .Where(x => x.ClientId == client.Id)
+                .OrderByDescending(x => x.SampledAt)
+                .FirstOrDefaultAsync(cancellationToken);
+
+            db.ClientMetrics.Add(new ClientMetric
+            {
+                Client = client,
+                SampledAt = now,
+                BytesSent = remoteClient.BytesSent,
+                BytesReceived = remoteClient.BytesReceived,
+                SpeedUpKbps = ComputeRateKbps(previousClientMetric?.BytesSent ?? remoteClient.BytesSent, remoteClient.BytesSent, previousClientMetric?.SampledAt, now),
+                SpeedDownKbps = ComputeRateKbps(previousClientMetric?.BytesReceived ?? remoteClient.BytesReceived, remoteClient.BytesReceived, previousClientMetric?.SampledAt, now),
+                IsOnline = remoteClient.LastHandshake is not null &&
+                           remoteClient.LastHandshake.Value >= DateTimeOffset.UtcNow.AddMinutes(-5),
+            });
+
+            upserted++;
+        }
+
+        await db.SaveChangesAsync(cancellationToken);
+
+        return new ServerSyncResult(server.Id, upserted, snapshot.ActiveClients, now);
+    }
+
     private static ServerStatus ParseServerStatus(string status) =>
         status.Trim().ToLowerInvariant() switch
         {
             "active" => ServerStatus.Active,
+            "running" => ServerStatus.Active,
             "degraded" => ServerStatus.Degraded,
             "stopped" => ServerStatus.Stopped,
+            "exited" => ServerStatus.Stopped,
             "error" => ServerStatus.Error,
             _ => ServerStatus.Provisioning,
         };
@@ -136,6 +165,38 @@ public sealed class ServerSyncService(
             "expired" => ClientStatus.Expired,
             _ => ClientStatus.Unknown,
         };
+
+    private static string ResolveClientName(AgentClientSnapshot remoteClient, VpnClient client)
+    {
+        if (!string.IsNullOrWhiteSpace(remoteClient.Name))
+        {
+            return remoteClient.Name.Trim();
+        }
+
+        if (!string.IsNullOrWhiteSpace(client.Name))
+        {
+            return client.Name;
+        }
+
+        return $"Imported {remoteClient.Address}";
+    }
+
+    private static long ComputeRateKbps(long previousBytes, long currentBytes, DateTime? previousSampleAt, DateTime currentSampleAt)
+    {
+        if (previousSampleAt is null || currentBytes < previousBytes)
+        {
+            return 0;
+        }
+
+        var elapsedSeconds = Math.Max(0, (currentSampleAt - previousSampleAt.Value).TotalSeconds);
+        if (elapsedSeconds <= 0.5d)
+        {
+            return 0;
+        }
+
+        var deltaBytes = currentBytes - previousBytes;
+        return (long)Math.Round(deltaBytes / elapsedSeconds / 1024d);
+    }
 }
 
 public sealed record ServerSyncResult(

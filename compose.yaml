@@ -26,6 +26,8 @@ services:
     container_name: amnezia-panel-dotnet-api
     restart: unless-stopped
     depends_on:
+      agent:
+        condition: service_started
       postgres:
         condition: service_healthy
     env_file:
@@ -38,8 +40,21 @@ services:
       Agent__ApiKey: ${AGENT_API_KEY}
     ports:
       - "127.0.0.1:8083:8083"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+
+  agent:
+    build:
+      context: .
+      dockerfile: src/Amnezia.Agent/Dockerfile
+    container_name: amnezia-agent
+    restart: unless-stopped
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://0.0.0.0:9180
+      Security__ApiKey: ${AGENT_API_KEY}
+    ports:
+      - "127.0.0.1:9180:9180"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
 
 volumes:
   pg_data:

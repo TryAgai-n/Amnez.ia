@@ -14,6 +14,10 @@ public sealed class ServerMetric
 
     public double MemoryTotalMb { get; set; }
 
+    public long NetworkRxBytes { get; set; }
+
+    public long NetworkTxBytes { get; set; }
+
     public double NetworkRxKbps { get; set; }
 
     public double NetworkTxKbps { get; set; }

@@ -18,6 +18,7 @@ builder.Services.AddDbContext<PanelDbContext>(options => options.UseNpgsql(conne
 
 builder.Services.AddHttpClient<IAmneziaAgentClient, AmneziaAgentHttpClient>();
 builder.Services.AddScoped<ServerSyncService>();
+builder.Services.AddScoped<ServerImportService>();
 builder.Services.AddScoped<JobService>();
 builder.Services.AddHostedService<MetricsSyncBackgroundService>();
 builder.Services.AddProblemDetails();

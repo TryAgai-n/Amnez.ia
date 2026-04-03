@@ -14,7 +14,23 @@ public sealed class PanelServer
 
     public string? ContainerName { get; set; }
 
+    public string? ConfigPath { get; set; }
+
+    public string? InterfaceName { get; set; }
+
+    public string? QuickCommand { get; set; }
+
+    public string? ShowCommand { get; set; }
+
     public int? ListenPort { get; set; }
+
+    public string? VpnSubnet { get; set; }
+
+    public string? ServerPublicKey { get; set; }
+
+    public string? PresharedKey { get; set; }
+
+    public string? AwgParametersJson { get; set; }
 
     public ServerStatus Status { get; set; } = ServerStatus.Provisioning;
 

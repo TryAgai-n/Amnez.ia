@@ -1,6 +1,7 @@
 using Amnezia.Panel.Api.Data;
 using Amnezia.Panel.Api.Domain;
 using Amnezia.Panel.Api.Services;
+using Amnezia.Panel.Contracts;
 using Microsoft.EntityFrameworkCore;
 
 namespace Amnezia.Panel.Api.Endpoints;
@@ -23,7 +24,9 @@ public static class ServerEndpoints
                     x.SshPort,
                     x.RuntimeType,
                     x.ContainerName,
+                    x.InterfaceName,
                     x.ListenPort,
+                    x.VpnSubnet,
                     x.Status.ToString(),
                     x.LastSyncedAt,
                     db.VpnClients.Count(c => c.ServerId == x.Id)))
@@ -32,6 +35,20 @@ public static class ServerEndpoints
             return Results.Ok(servers);
         })
         .WithName("ListServers");
+
+        group.MapGet("/import-candidates", async (ServerImportService importService, CancellationToken cancellationToken) =>
+        {
+            var candidates = await importService.ListImportCandidatesAsync(cancellationToken);
+            return Results.Ok(candidates.Select(x => new ImportCandidateResponse(
+                x.RuntimeType,
+                x.ContainerName,
+                x.InterfaceName,
+                x.ConfigPath,
+                x.ListenPort,
+                x.VpnSubnet,
+                x.Status)));
+        })
+        .WithName("ListServerImportCandidates");
 
         group.MapPost("/", async (CreateServerRequest request, PanelDbContext db, CancellationToken cancellationToken) =>
         {
@@ -55,6 +72,22 @@ public static class ServerEndpoints
             return Results.Created($"/api/servers/{server.Id}", ToDetailResponse(server, 0));
         })
         .WithName("CreateServer");
+
+        group.MapPost("/import-existing", async (ImportExistingServerRequest request, ServerImportService importService, CancellationToken cancellationToken) =>
+        {
+            var server = await importService.ImportExistingServerAsync(
+                new ImportExistingServerCommand(
+                    request.Name,
+                    request.Host,
+                    request.SshPort,
+                    request.RuntimeType,
+                    request.ContainerName),
+                cancellationToken);
+
+            var clientCount = server.Clients.Count;
+            return Results.Created($"/api/servers/{server.Id}", ToDetailResponse(server, clientCount));
+        })
+        .WithName("ImportExistingServer");
 
         group.MapGet("/{id:guid}", async (Guid id, PanelDbContext db, CancellationToken cancellationToken) =>
         {
@@ -118,7 +151,9 @@ public static class ServerEndpoints
             server.SshPort,
             server.RuntimeType,
             server.ContainerName,
+            server.InterfaceName,
             server.ListenPort,
+            server.VpnSubnet,
             server.Status.ToString(),
             server.LastSyncedAt,
             server.LastError,
@@ -141,10 +176,21 @@ public static class ServerEndpoints
         int SshPort,
         string RuntimeType,
         string? ContainerName,
+        string? InterfaceName,
         int? ListenPort,
+        string? VpnSubnet,
         string Status,
         DateTime? LastSyncedAt,
         int ClientCount);
+
+    public sealed record ImportCandidateResponse(
+        string RuntimeType,
+        string ContainerName,
+        string InterfaceName,
+        string ConfigPath,
+        int ListenPort,
+        string? VpnSubnet,
+        string Status);
 
     public sealed record ServerDetailResponse(
         Guid Id,
@@ -153,13 +199,22 @@ public static class ServerEndpoints
         int SshPort,
         string RuntimeType,
         string? ContainerName,
+        string? InterfaceName,
         int? ListenPort,
+        string? VpnSubnet,
         string Status,
         DateTime? LastSyncedAt,
         string? LastError,
         int ClientCount,
         DateTime CreatedAt,
         DateTime UpdatedAt);
+
+    public sealed record ImportExistingServerRequest(
+        string Name,
+        string Host,
+        int SshPort = 22,
+        string RuntimeType = "awg",
+        string? ContainerName = null);
 
     public sealed record ClientResponse(
         Guid Id,

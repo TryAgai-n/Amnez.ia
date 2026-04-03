@@ -30,6 +30,14 @@ public sealed class PanelDbContext(DbContextOptions<PanelDbContext> options) : D
             entity.Property(x => x.Host).HasMaxLength(255);
             entity.Property(x => x.RuntimeType).HasMaxLength(32);
             entity.Property(x => x.ContainerName).HasMaxLength(255);
+            entity.Property(x => x.ConfigPath).HasMaxLength(255);
+            entity.Property(x => x.InterfaceName).HasMaxLength(64);
+            entity.Property(x => x.QuickCommand).HasMaxLength(32);
+            entity.Property(x => x.ShowCommand).HasMaxLength(32);
+            entity.Property(x => x.VpnSubnet).HasMaxLength(64);
+            entity.Property(x => x.ServerPublicKey).HasColumnType("text");
+            entity.Property(x => x.PresharedKey).HasColumnType("text");
+            entity.Property(x => x.AwgParametersJson).HasColumnType("text");
             entity.Property(x => x.LastError).HasColumnType("text");
             entity.Property(x => x.Status).HasConversion(serverStatusConverter).HasMaxLength(32);
             entity.HasMany(x => x.Clients).WithOne(x => x.Server).HasForeignKey(x => x.ServerId);
