@@ -28,6 +28,29 @@ public sealed class JobService(
         return job;
     }
 
+    public async Task<JobRecord> RunServerSyncNowAsync(Guid serverId, string requestedBy, CancellationToken cancellationToken)
+    {
+        var job = new JobRecord
+        {
+            Id = Guid.NewGuid(),
+            ServerId = serverId,
+            Type = "sync-server",
+            Status = JobStatus.Running,
+            RequestedBy = requestedBy,
+            RequestedAt = DateTime.UtcNow,
+            StartedAt = DateTime.UtcNow,
+            PayloadJson = JsonSerializer.Serialize(new { serverId }),
+        };
+
+        db.Jobs.Add(job);
+        await db.SaveChangesAsync(cancellationToken);
+
+        await ExecuteJobAsync(job, cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
+
+        return job;
+    }
+
     public async Task<int> ProcessPendingJobsAsync(int batchSize, CancellationToken cancellationToken)
     {
         var jobs = await db.Jobs
@@ -43,36 +66,39 @@ public sealed class JobService(
             job.Status = JobStatus.Running;
             job.StartedAt = DateTime.UtcNow;
             await db.SaveChangesAsync(cancellationToken);
-
-            try
-            {
-                switch (job.Type)
-                {
-                    case "sync-server" when job.ServerId.HasValue:
-                    {
-                        var result = await serverSyncService.SyncServerAsync(job.ServerId.Value, cancellationToken);
-                        job.ResultJson = JsonSerializer.Serialize(result);
-                        break;
-                    }
-                    default:
-                        throw new InvalidOperationException($"Unsupported job type '{job.Type}'.");
-                }
-
-                job.Status = JobStatus.Completed;
-                job.CompletedAt = DateTime.UtcNow;
-                job.Error = null;
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "Job {JobId} failed", job.Id);
-                job.Status = JobStatus.Failed;
-                job.CompletedAt = DateTime.UtcNow;
-                job.Error = ex.Message;
-            }
-
+            await ExecuteJobAsync(job, cancellationToken);
             await db.SaveChangesAsync(cancellationToken);
         }
 
         return processed;
+    }
+
+    private async Task ExecuteJobAsync(JobRecord job, CancellationToken cancellationToken)
+    {
+        try
+        {
+            switch (job.Type)
+            {
+                case "sync-server" when job.ServerId.HasValue:
+                {
+                    var result = await serverSyncService.SyncServerAsync(job.ServerId.Value, cancellationToken);
+                    job.ResultJson = JsonSerializer.Serialize(result);
+                    break;
+                }
+                default:
+                    throw new InvalidOperationException($"Unsupported job type '{job.Type}'.");
+            }
+
+            job.Status = JobStatus.Completed;
+            job.CompletedAt = DateTime.UtcNow;
+            job.Error = null;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Job {JobId} failed", job.Id);
+            job.Status = JobStatus.Failed;
+            job.CompletedAt = DateTime.UtcNow;
+            job.Error = ex.Message;
+        }
     }
 }

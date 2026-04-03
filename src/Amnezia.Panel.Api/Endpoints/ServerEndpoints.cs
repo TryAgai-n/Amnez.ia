@@ -167,8 +167,18 @@ public static class ServerEndpoints
 
         group.MapPost("/{id:guid}/sync", async (Guid id, JobService jobService, CancellationToken cancellationToken) =>
         {
-            var job = await jobService.EnqueueServerSyncJobAsync(id, "api", cancellationToken);
-            return Results.Accepted($"/api/jobs/{job.Id}", new JobAcceptedResponse(job.Id, job.Status.ToString(), job.ServerId));
+            var job = await jobService.RunServerSyncNowAsync(id, "api", cancellationToken);
+            return Results.Ok(new JobSyncResponse(
+                job.Id,
+                job.ServerId,
+                job.Type,
+                job.Status.ToString(),
+                job.RequestedBy,
+                job.RequestedAt,
+                job.StartedAt,
+                job.CompletedAt,
+                job.Error,
+                job.ResultJson));
         })
         .WithName("EnqueueServerSync");
 
@@ -303,4 +313,16 @@ public static class ServerEndpoints
         bool HasQrCode);
 
     public sealed record JobAcceptedResponse(Guid JobId, string Status, Guid? ServerId);
+
+    public sealed record JobSyncResponse(
+        Guid Id,
+        Guid? ServerId,
+        string Type,
+        string Status,
+        string RequestedBy,
+        DateTime RequestedAt,
+        DateTime? StartedAt,
+        DateTime? CompletedAt,
+        string? Error,
+        string? ResultJson);
 }

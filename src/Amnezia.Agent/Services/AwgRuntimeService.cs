@@ -146,30 +146,38 @@ public sealed class AwgRuntimeService(
 
     private async Task<AgentServerSnapshot> BuildSnapshotAsync(ResolvedRuntime runtime, CancellationToken cancellationToken)
     {
-        var config = await ReadConfigAsync(runtime, cancellationToken);
+        var config = runtime.Config;
 
         var peers = ParsePeerBlocks(config);
         var keyValues = ParseKeyValueConfig(config);
-        var clientsTable = await LoadClientsTableAsync(runtime, cancellationToken);
-        var dumpOutput = await commandRunner.RunAsync(
+        var clientsTableTask = LoadClientsTableAsync(runtime, cancellationToken);
+        var dumpOutputTask = commandRunner.RunAsync(
             $"docker exec -i {Shell(runtime.ContainerName)} {runtime.ShowCommand} show {Shell(runtime.InterfaceName)} dump",
             cancellationToken);
-        var dumpStats = ParseWireGuardDump(dumpOutput);
-
-        var statsOutput = await commandRunner.RunAsync(
+        var statsOutputTask = commandRunner.RunAsync(
             $"docker stats --no-stream --format {Shell("{{.CPUPerc}}|{{.MemUsage}}")} {Shell(runtime.ContainerName)}",
             cancellationToken);
-        var interfaceBytesOutput = await commandRunner.RunAsync(
+        var interfaceBytesOutputTask = commandRunner.RunAsync(
             $"docker exec -i {Shell(runtime.ContainerName)} sh -lc {Shell($"cat /sys/class/net/{runtime.InterfaceName}/statistics/rx_bytes && cat /sys/class/net/{runtime.InterfaceName}/statistics/tx_bytes")}",
             cancellationToken);
+        var serverPublicKeyTask = TryReadCommandAsync(
+            $"docker exec -i {Shell(runtime.ContainerName)} sh -lc {Shell("cat /opt/amnezia/awg/wireguard_server_public_key.key 2>/dev/null || true")}",
+            cancellationToken);
+        var presharedKeyTask = TryReadCommandAsync(
+            $"docker exec -i {Shell(runtime.ContainerName)} sh -lc {Shell("cat /opt/amnezia/awg/wireguard_psk.key 2>/dev/null || true")}",
+            cancellationToken);
+        await Task.WhenAll(clientsTableTask, dumpOutputTask, statsOutputTask, interfaceBytesOutputTask, serverPublicKeyTask, presharedKeyTask);
+
+        var clientsTable = await clientsTableTask;
+        var dumpStats = ParseWireGuardDump(await dumpOutputTask);
+        var statsOutput = await statsOutputTask;
+        var interfaceBytesOutput = await interfaceBytesOutputTask;
 
         var cpuPercent = ParseCpuPercent(statsOutput);
         var (memoryUsedMb, memoryTotalMb) = ParseMemoryUsage(statsOutput);
         var (networkRxBytes, networkTxBytes) = ParseInterfaceTotals(interfaceBytesOutput);
 
-        var serverPublicKey = await TryReadCommandAsync(
-            $"docker exec -i {Shell(runtime.ContainerName)} sh -lc {Shell("cat /opt/amnezia/awg/wireguard_server_public_key.key 2>/dev/null || true")}",
-            cancellationToken);
+        var serverPublicKey = await serverPublicKeyTask;
         if (string.IsNullOrWhiteSpace(serverPublicKey))
         {
             serverPublicKey = await TryReadCommandAsync(
@@ -177,9 +185,7 @@ public sealed class AwgRuntimeService(
                 cancellationToken);
         }
 
-        var presharedKey = await TryReadCommandAsync(
-            $"docker exec -i {Shell(runtime.ContainerName)} sh -lc {Shell("cat /opt/amnezia/awg/wireguard_psk.key 2>/dev/null || true")}",
-            cancellationToken);
+        var presharedKey = await presharedKeyTask;
 
         var clientNameByKey = clientsTable
             .Where(x => !string.IsNullOrWhiteSpace(x.ClientId))
@@ -312,6 +318,7 @@ public sealed class AwgRuntimeService(
             containerName,
             interfaceName,
             configPath,
+            config,
             quickCommand,
             showCommand,
             listenPort,
@@ -762,6 +769,7 @@ public sealed class AwgRuntimeService(
         string ContainerName,
         string InterfaceName,
         string ConfigPath,
+        string Config,
         string QuickCommand,
         string ShowCommand,
         int ListenPort,
