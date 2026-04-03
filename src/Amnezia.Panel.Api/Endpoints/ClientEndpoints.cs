@@ -76,6 +76,32 @@ public static class ClientEndpoints
         })
         .WithName("GetClientQrCode");
 
+        group.MapGet("/{id:guid}/metrics", async (Guid id, double? hours, PanelDbContext db, CancellationToken cancellationToken) =>
+        {
+            var exists = await db.VpnClients.AnyAsync(x => x.Id == id, cancellationToken);
+            if (!exists)
+            {
+                return Results.NotFound();
+            }
+
+            var cutoff = DateTime.UtcNow.AddHours(-Math.Max(1d / 60d, hours ?? 24d));
+            var metrics = await db.ClientMetrics
+                .AsNoTracking()
+                .Where(x => x.ClientId == id && x.SampledAt >= cutoff)
+                .OrderBy(x => x.SampledAt)
+                .Select(x => new ClientMetricResponse(
+                    x.SampledAt,
+                    x.BytesSent,
+                    x.BytesReceived,
+                    x.SpeedUpKbps,
+                    x.SpeedDownKbps,
+                    x.IsOnline))
+                .ToListAsync(cancellationToken);
+
+            return Results.Ok(metrics);
+        })
+        .WithName("ListClientMetrics");
+
         group.MapPost("/{id:guid}/revoke", async (Guid id, ClientLifecycleService lifecycleService, CancellationToken cancellationToken) =>
         {
             var client = await lifecycleService.RevokeClientAsync(id, cancellationToken);
@@ -96,6 +122,28 @@ public static class ClientEndpoints
             return Results.Ok(ToDetailResponse(client));
         })
         .WithName("SyncClient");
+
+        group.MapPost("/{id:guid}/set-expiration", async (
+            Guid id,
+            SetClientExpirationRequest request,
+            ClientLifecycleService lifecycleService,
+            CancellationToken cancellationToken) =>
+        {
+            var client = await lifecycleService.UpdateExpirationAsync(id, request.ExpiresAt, cancellationToken);
+            return Results.Ok(ToDetailResponse(client));
+        })
+        .WithName("SetClientExpiration");
+
+        group.MapPost("/{id:guid}/set-traffic-limit", async (
+            Guid id,
+            SetClientTrafficLimitRequest request,
+            ClientLifecycleService lifecycleService,
+            CancellationToken cancellationToken) =>
+        {
+            var client = await lifecycleService.UpdateTrafficLimitAsync(id, request.LimitBytes, cancellationToken);
+            return Results.Ok(ToDetailResponse(client));
+        })
+        .WithName("SetClientTrafficLimit");
 
         group.MapDelete("/{id:guid}", async (Guid id, ClientLifecycleService lifecycleService, CancellationToken cancellationToken) =>
         {
@@ -141,6 +189,18 @@ public static class ClientEndpoints
         long? TrafficLimitBytes = null);
 
     public sealed record ClientQrCodeResponse(Guid Id, string? QrCodeDataUri);
+
+    public sealed record ClientMetricResponse(
+        DateTime SampledAt,
+        long BytesSent,
+        long BytesReceived,
+        long SpeedUpKbps,
+        long SpeedDownKbps,
+        bool IsOnline);
+
+    public sealed record SetClientExpirationRequest(DateTime? ExpiresAt);
+
+    public sealed record SetClientTrafficLimitRequest(long? LimitBytes);
 
     public sealed record ClientDetailResponse(
         Guid Id,

@@ -157,6 +157,30 @@ public sealed class ClientLifecycleService(
             .FirstAsync(x => x.Id == clientId, cancellationToken);
     }
 
+    public async Task<VpnClient> UpdateExpirationAsync(Guid clientId, DateTime? expiresAt, CancellationToken cancellationToken)
+    {
+        var client = await db.VpnClients
+            .FirstOrDefaultAsync(x => x.Id == clientId, cancellationToken)
+            ?? throw new KeyNotFoundException($"Client '{clientId}' was not found.");
+
+        client.ExpiresAt = expiresAt;
+        client.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(cancellationToken);
+        return client;
+    }
+
+    public async Task<VpnClient> UpdateTrafficLimitAsync(Guid clientId, long? trafficLimitBytes, CancellationToken cancellationToken)
+    {
+        var client = await db.VpnClients
+            .FirstOrDefaultAsync(x => x.Id == clientId, cancellationToken)
+            ?? throw new KeyNotFoundException($"Client '{clientId}' was not found.");
+
+        client.TrafficLimitBytes = trafficLimitBytes;
+        client.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(cancellationToken);
+        return client;
+    }
+
     private static void EnsureServerReady(PanelServer server)
     {
         if (server.Status == ServerStatus.Provisioning)

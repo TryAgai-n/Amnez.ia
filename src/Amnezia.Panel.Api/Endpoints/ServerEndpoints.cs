@@ -136,12 +136,70 @@ public static class ServerEndpoints
         })
         .WithName("ListServerClients");
 
+        group.MapGet("/{id:guid}/metrics", async (Guid id, double? hours, PanelDbContext db, CancellationToken cancellationToken) =>
+        {
+            var exists = await db.Servers.AnyAsync(x => x.Id == id, cancellationToken);
+            if (!exists)
+            {
+                return Results.NotFound();
+            }
+
+            var cutoff = DateTime.UtcNow.AddHours(-Math.Max(1d / 60d, hours ?? 24d));
+            var metrics = await db.ServerMetrics
+                .AsNoTracking()
+                .Where(x => x.ServerId == id && x.SampledAt >= cutoff)
+                .OrderBy(x => x.SampledAt)
+                .Select(x => new ServerMetricResponse(
+                    x.SampledAt,
+                    x.CpuPercent,
+                    x.MemoryUsedMb,
+                    x.MemoryTotalMb,
+                    0d,
+                    0d,
+                    x.NetworkRxKbps / 1024d,
+                    x.NetworkTxKbps / 1024d,
+                    x.ActiveClients))
+                .ToListAsync(cancellationToken);
+
+            return Results.Ok(metrics);
+        })
+        .WithName("ListServerMetrics");
+
         group.MapPost("/{id:guid}/sync", async (Guid id, JobService jobService, CancellationToken cancellationToken) =>
         {
             var job = await jobService.EnqueueServerSyncJobAsync(id, "api", cancellationToken);
             return Results.Accepted($"/api/jobs/{job.Id}", new JobAcceptedResponse(job.Id, job.Status.ToString(), job.ServerId));
         })
         .WithName("EnqueueServerSync");
+
+        group.MapDelete("/{id:guid}", async (Guid id, PanelDbContext db, CancellationToken cancellationToken) =>
+        {
+            var server = await db.Servers
+                .Include(x => x.Clients)
+                .Include(x => x.Metrics)
+                .Include(x => x.Jobs)
+                .FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
+
+            if (server is null)
+            {
+                return Results.NotFound();
+            }
+
+            var clientIds = server.Clients.Select(x => x.Id).ToList();
+            var clientMetrics = await db.ClientMetrics
+                .Where(x => clientIds.Contains(x.ClientId))
+                .ToListAsync(cancellationToken);
+
+            db.ClientMetrics.RemoveRange(clientMetrics);
+            db.VpnClients.RemoveRange(server.Clients);
+            db.ServerMetrics.RemoveRange(server.Metrics);
+            db.Jobs.RemoveRange(server.Jobs);
+            db.Servers.Remove(server);
+            await db.SaveChangesAsync(cancellationToken);
+
+            return Results.NoContent();
+        })
+        .WithName("DeleteServer");
 
         return endpoints;
     }
@@ -211,6 +269,17 @@ public static class ServerEndpoints
         int ClientCount,
         DateTime CreatedAt,
         DateTime UpdatedAt);
+
+    public sealed record ServerMetricResponse(
+        DateTime SampledAt,
+        double CpuPercent,
+        double RamUsedMb,
+        double RamTotalMb,
+        double DiskUsedGb,
+        double DiskTotalGb,
+        double NetworkRxMbps,
+        double NetworkTxMbps,
+        int ActiveClients);
 
     public sealed record ImportExistingServerRequest(
         string Name,
