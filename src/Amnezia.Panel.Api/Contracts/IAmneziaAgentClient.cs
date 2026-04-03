@@ -10,4 +10,23 @@ public interface IAmneziaAgentClient
     Task<AgentServerSnapshot> DiscoverRuntimeAsync(AgentRuntimeDiscoveryRequest request, CancellationToken cancellationToken);
 
     Task<AgentServerSnapshot> GetServerSnapshotAsync(PanelServer server, CancellationToken cancellationToken);
+
+    Task<AgentClientMutationResult> CreateClientAsync(
+        PanelServer server,
+        string name,
+        string address,
+        string allowedIps,
+        string? presharedKey,
+        CancellationToken cancellationToken);
+
+    Task<AgentClientMutationResult> RestoreClientAsync(
+        PanelServer server,
+        string name,
+        string publicKey,
+        string address,
+        string allowedIps,
+        string? presharedKey,
+        CancellationToken cancellationToken);
+
+    Task RemoveClientAsync(PanelServer server, string publicKey, CancellationToken cancellationToken);
 }

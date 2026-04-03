@@ -52,9 +52,15 @@ public sealed class PanelDbContext(DbContextOptions<PanelDbContext> options) : D
             entity.HasKey(x => x.Id);
             entity.Property(x => x.Name).HasMaxLength(200);
             entity.Property(x => x.Address).HasMaxLength(64);
+            entity.Property(x => x.AllowedIps).HasMaxLength(255);
             entity.Property(x => x.PublicKey).HasMaxLength(255);
+            entity.Property(x => x.PrivateKey).HasColumnType("text");
+            entity.Property(x => x.PresharedKey).HasColumnType("text");
+            entity.Property(x => x.Config).HasColumnType("text");
+            entity.Property(x => x.QrCodeDataUri).HasColumnType("text");
             entity.Property(x => x.Status).HasConversion(clientStatusConverter).HasMaxLength(32);
             entity.HasIndex(x => new { x.ServerId, x.PublicKey }).IsUnique();
+            entity.HasIndex(x => new { x.ServerId, x.Address }).IsUnique();
         });
 
         modelBuilder.Entity<ServerMetric>(entity =>

@@ -112,6 +112,8 @@ public sealed class ServerSyncService(
 
             client.Name = ResolveClientName(remoteClient, client);
             client.Address = string.IsNullOrWhiteSpace(remoteClient.Address) ? client.Address : remoteClient.Address;
+            client.AllowedIps = string.IsNullOrWhiteSpace(remoteClient.AllowedIps) ? client.AllowedIps : remoteClient.AllowedIps;
+            client.PresharedKey = string.IsNullOrWhiteSpace(remoteClient.PresharedKey) ? client.PresharedKey : remoteClient.PresharedKey;
             client.Status = ParseClientStatus(remoteClient.Status);
             client.BytesSent = remoteClient.BytesSent;
             client.BytesReceived = remoteClient.BytesReceived;

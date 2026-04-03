@@ -72,4 +72,22 @@ app.MapPost("/v1/runtime/snapshot", async (AgentSnapshotRequest request, AwgRunt
     return Results.Ok(snapshot);
 });
 
+app.MapPost("/v1/clients/create", async (AgentCreateClientRequest request, AwgRuntimeService runtimeService, CancellationToken cancellationToken) =>
+{
+    var result = await runtimeService.CreateClientAsync(request, cancellationToken);
+    return Results.Ok(result);
+});
+
+app.MapPost("/v1/clients/restore", async (AgentRestoreClientRequest request, AwgRuntimeService runtimeService, CancellationToken cancellationToken) =>
+{
+    var result = await runtimeService.RestoreClientAsync(request, cancellationToken);
+    return Results.Ok(result);
+});
+
+app.MapPost("/v1/clients/remove", async (AgentRemoveClientRequest request, AwgRuntimeService runtimeService, CancellationToken cancellationToken) =>
+{
+    await runtimeService.RemoveClientAsync(request, cancellationToken);
+    return Results.Ok(new { success = true });
+});
+
 app.Run();

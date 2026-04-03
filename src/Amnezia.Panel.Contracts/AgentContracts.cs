@@ -50,9 +50,40 @@ public sealed record AgentClientSnapshot(
     string Name,
     string Address,
     string AllowedIps,
+    string? PresharedKey,
     string Status,
     long BytesSent,
     long BytesReceived,
     DateTimeOffset? LastHandshake,
     long SpeedUpKbps,
     long SpeedDownKbps);
+
+public sealed record AgentCreateClientRequest(
+    string RuntimeType = "awg",
+    string? ContainerName = null,
+    string Name = "",
+    string Address = "",
+    string AllowedIps = "",
+    string? PresharedKey = null);
+
+public sealed record AgentRestoreClientRequest(
+    string RuntimeType = "awg",
+    string? ContainerName = null,
+    string Name = "",
+    string PublicKey = "",
+    string Address = "",
+    string AllowedIps = "",
+    string? PresharedKey = null);
+
+public sealed record AgentRemoveClientRequest(
+    string RuntimeType = "awg",
+    string? ContainerName = null,
+    string PublicKey = "");
+
+public sealed record AgentClientMutationResult(
+    string PublicKey,
+    string? PrivateKey,
+    string Name,
+    string Address,
+    string AllowedIps,
+    string? PresharedKey);

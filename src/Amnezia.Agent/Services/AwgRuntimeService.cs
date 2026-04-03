@@ -8,6 +8,8 @@ public sealed class AwgRuntimeService(
     ShellCommandRunner commandRunner,
     ILogger<AwgRuntimeService> logger)
 {
+    private const string ClientsTablePath = "/opt/amnezia/awg/clientsTable";
+
     public async Task<bool> CanAccessDockerAsync(CancellationToken cancellationToken)
     {
         try
@@ -64,19 +66,91 @@ public sealed class AwgRuntimeService(
         return await BuildSnapshotAsync(runtime, cancellationToken);
     }
 
+    public async Task<AgentClientMutationResult> CreateClientAsync(AgentCreateClientRequest request, CancellationToken cancellationToken)
+    {
+        var runtime = await ResolveRuntimeAsync(request.ContainerName, cancellationToken);
+        ValidateClientRequest(request.Name, request.Address, request.AllowedIps);
+
+        var (privateKey, publicKey) = await GenerateKeyPairAsync(runtime, cancellationToken);
+        await UpsertClientAsync(runtime, request.Name, publicKey, request.Address, request.AllowedIps, request.PresharedKey, cancellationToken);
+
+        return new AgentClientMutationResult(publicKey, privateKey, request.Name.Trim(), request.Address.Trim(), request.AllowedIps.Trim(), request.PresharedKey);
+    }
+
+    public async Task<AgentClientMutationResult> RestoreClientAsync(AgentRestoreClientRequest request, CancellationToken cancellationToken)
+    {
+        var runtime = await ResolveRuntimeAsync(request.ContainerName, cancellationToken);
+        ValidateClientRequest(request.Name, request.Address, request.AllowedIps);
+
+        if (string.IsNullOrWhiteSpace(request.PublicKey))
+        {
+            throw new InvalidOperationException("PublicKey is required to restore a client.");
+        }
+
+        await UpsertClientAsync(runtime, request.Name, request.PublicKey.Trim(), request.Address, request.AllowedIps, request.PresharedKey, cancellationToken);
+
+        return new AgentClientMutationResult(
+            request.PublicKey.Trim(),
+            null,
+            request.Name.Trim(),
+            request.Address.Trim(),
+            request.AllowedIps.Trim(),
+            request.PresharedKey);
+    }
+
+    public async Task RemoveClientAsync(AgentRemoveClientRequest request, CancellationToken cancellationToken)
+    {
+        var runtime = await ResolveRuntimeAsync(request.ContainerName, cancellationToken);
+        if (string.IsNullOrWhiteSpace(request.PublicKey))
+        {
+            throw new InvalidOperationException("PublicKey is required to remove a client.");
+        }
+
+        var publicKey = request.PublicKey.Trim();
+        var config = await ReadConfigAsync(runtime, cancellationToken);
+        var updatedConfig = RemovePeerFromConfig(config, publicKey, null);
+
+        await WriteConfigAsync(runtime, updatedConfig, cancellationToken);
+        await ApplyConfigAsync(runtime, cancellationToken);
+        await SaveClientsTableAsync(runtime, UpdateClientsTable(await LoadClientsTableAsync(runtime, cancellationToken), publicKey, null), cancellationToken);
+    }
+
+    private async Task UpsertClientAsync(
+        ResolvedRuntime runtime,
+        string name,
+        string publicKey,
+        string address,
+        string allowedIps,
+        string? presharedKey,
+        CancellationToken cancellationToken)
+    {
+        var normalizedName = name.Trim();
+        var normalizedPublicKey = publicKey.Trim();
+        var normalizedAddress = address.Trim();
+        var normalizedAllowedIps = allowedIps.Trim();
+
+        var config = await ReadConfigAsync(runtime, cancellationToken);
+        var updatedConfig = AppendPeerBlock(
+            RemovePeerFromConfig(config, normalizedPublicKey, normalizedAddress),
+            normalizedPublicKey,
+            normalizedAllowedIps,
+            presharedKey);
+
+        await WriteConfigAsync(runtime, updatedConfig, cancellationToken);
+        await ApplyConfigAsync(runtime, cancellationToken);
+        await SaveClientsTableAsync(
+            runtime,
+            UpdateClientsTable(await LoadClientsTableAsync(runtime, cancellationToken), normalizedPublicKey, normalizedName),
+            cancellationToken);
+    }
+
     private async Task<AgentServerSnapshot> BuildSnapshotAsync(ResolvedRuntime runtime, CancellationToken cancellationToken)
     {
-        var config = await commandRunner.RunAsync(
-            $"docker exec -i {Shell(runtime.ContainerName)} cat {Shell(runtime.ConfigPath)}",
-            cancellationToken);
+        var config = await ReadConfigAsync(runtime, cancellationToken);
 
         var peers = ParsePeerBlocks(config);
         var keyValues = ParseKeyValueConfig(config);
-        var clientsTableJson = await commandRunner.RunAsync(
-            $"docker exec -i {Shell(runtime.ContainerName)} sh -lc {Shell("cat /opt/amnezia/awg/clientsTable 2>/dev/null || echo []")}",
-            cancellationToken);
-
-        var clientsTable = DeserializeClientsTable(clientsTableJson);
+        var clientsTable = await LoadClientsTableAsync(runtime, cancellationToken);
         var dumpOutput = await commandRunner.RunAsync(
             $"docker exec -i {Shell(runtime.ContainerName)} {runtime.ShowCommand} show {Shell(runtime.InterfaceName)} dump",
             cancellationToken);
@@ -123,6 +197,8 @@ public sealed class AwgRuntimeService(
             }
 
             peer.TryGetValue("AllowedIPs", out var allowedIps);
+            peer.TryGetValue("PresharedKey", out var peerPresharedKey);
+
             var address = StripCidr(allowedIps);
             if (string.IsNullOrWhiteSpace(address))
             {
@@ -141,6 +217,7 @@ public sealed class AwgRuntimeService(
                 ResolveClientName(clientNameByKey, publicKey, address),
                 address,
                 allowedIps ?? string.Empty,
+                string.IsNullOrWhiteSpace(peerPresharedKey) ? null : peerPresharedKey,
                 "active",
                 stat.BytesSent,
                 stat.BytesReceived,
@@ -263,6 +340,97 @@ public sealed class AwgRuntimeService(
         return string.Equals(output.Trim(), "1", StringComparison.Ordinal);
     }
 
+    private async Task<string> ReadConfigAsync(ResolvedRuntime runtime, CancellationToken cancellationToken) =>
+        await commandRunner.RunAsync(
+            $"docker exec -i {Shell(runtime.ContainerName)} cat {Shell(runtime.ConfigPath)}",
+            cancellationToken);
+
+    private async Task<(string PrivateKey, string PublicKey)> GenerateKeyPairAsync(ResolvedRuntime runtime, CancellationToken cancellationToken)
+    {
+        var output = await commandRunner.RunAsync(
+            $"docker exec -i {Shell(runtime.ContainerName)} sh -lc {Shell($"set -e; priv=$({runtime.ShowCommand} genkey); pub=$(printf %s \"$priv\" | {runtime.ShowCommand} pubkey); printf \"%s\\n---\\n%s\\n\" \"$priv\" \"$pub\"")}",
+            cancellationToken);
+
+        var parts = output.Split("\n---\n", StringSplitOptions.TrimEntries);
+        if (parts.Length != 2 || string.IsNullOrWhiteSpace(parts[0]) || string.IsNullOrWhiteSpace(parts[1]))
+        {
+            throw new InvalidOperationException("Failed to generate a client key pair.");
+        }
+
+        return (parts[0].Trim(), parts[1].Trim());
+    }
+
+    private async Task<List<ClientsTableEntry>> LoadClientsTableAsync(ResolvedRuntime runtime, CancellationToken cancellationToken)
+    {
+        var json = await commandRunner.RunAsync(
+            $"docker exec -i {Shell(runtime.ContainerName)} sh -lc {Shell($"cat {ClientsTablePath} 2>/dev/null || echo []")}",
+            cancellationToken);
+
+        return DeserializeClientsTable(json);
+    }
+
+    private async Task SaveClientsTableAsync(ResolvedRuntime runtime, IReadOnlyList<ClientsTableEntry> entries, CancellationToken cancellationToken)
+    {
+        var json = JsonSerializer.Serialize(entries, new JsonSerializerOptions { WriteIndented = true });
+        await WriteContentToContainerAsync(runtime.ContainerName, ClientsTablePath, json + "\n", cancellationToken);
+    }
+
+    private async Task WriteConfigAsync(ResolvedRuntime runtime, string config, CancellationToken cancellationToken)
+    {
+        await WriteContentToContainerAsync(runtime.ContainerName, runtime.ConfigPath, NormalizeConfig(config), cancellationToken);
+    }
+
+    private async Task WriteContentToContainerAsync(string containerName, string containerPath, string content, CancellationToken cancellationToken)
+    {
+        var tempPath = Path.Combine(Path.GetTempPath(), $"amnezia-agent-{Guid.NewGuid():N}.tmp");
+
+        try
+        {
+            await File.WriteAllTextAsync(tempPath, content, cancellationToken);
+            await commandRunner.RunAsync($"docker cp {Shell(tempPath)} {Shell($"{containerName}:{containerPath}")}", cancellationToken);
+        }
+        finally
+        {
+            try
+            {
+                if (File.Exists(tempPath))
+                {
+                    File.Delete(tempPath);
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogDebug(ex, "Failed to remove temporary file {TempPath}", tempPath);
+            }
+        }
+    }
+
+    private async Task ApplyConfigAsync(ResolvedRuntime runtime, CancellationToken cancellationToken)
+    {
+        var script = $"set -e; tmp=$(mktemp); {runtime.QuickCommand} strip {Shell(runtime.ConfigPath)} > \"$tmp\"; {runtime.ShowCommand} syncconf {Shell(runtime.InterfaceName)} \"$tmp\"; rm -f \"$tmp\"";
+        await commandRunner.RunAsync(
+            $"docker exec -i {Shell(runtime.ContainerName)} sh -lc {Shell(script)}",
+            cancellationToken);
+    }
+
+    private static void ValidateClientRequest(string name, string address, string allowedIps)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            throw new InvalidOperationException("Client name is required.");
+        }
+
+        if (string.IsNullOrWhiteSpace(address))
+        {
+            throw new InvalidOperationException("Client address is required.");
+        }
+
+        if (string.IsNullOrWhiteSpace(allowedIps))
+        {
+            throw new InvalidOperationException("Allowed IPs are required.");
+        }
+    }
+
     private static Dictionary<string, string> ParseKeyValueConfig(string config)
     {
         var result = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -380,6 +548,25 @@ public sealed class AwgRuntimeService(
         }
     }
 
+    private static IReadOnlyList<ClientsTableEntry> UpdateClientsTable(
+        IReadOnlyList<ClientsTableEntry> current,
+        string publicKey,
+        string? clientName)
+    {
+        var filtered = current
+            .Where(x => !string.Equals(x.ClientId, publicKey, StringComparison.Ordinal))
+            .ToList();
+
+        if (!string.IsNullOrWhiteSpace(clientName))
+        {
+            filtered.Add(new ClientsTableEntry(
+                publicKey,
+                new ClientsTableUserData(clientName.Trim())));
+        }
+
+        return filtered;
+    }
+
     private static string ResolveClientName(
         IReadOnlyDictionary<string, string> clientNameByKey,
         string publicKey,
@@ -391,6 +578,92 @@ public sealed class AwgRuntimeService(
         }
 
         return $"Imported {address}";
+    }
+
+    private static string RemovePeerFromConfig(string config, string publicKey, string? address)
+    {
+        var lines = config.Replace("\r\n", "\n").Split('\n');
+        var newLines = new List<string>(lines.Length);
+        var inPeerBlock = false;
+        var skipBlock = false;
+
+        foreach (var line in lines)
+        {
+            var trimmed = line.Trim();
+
+            if (trimmed.StartsWith('['))
+            {
+                inPeerBlock = string.Equals(trimmed, "[Peer]", StringComparison.Ordinal);
+                skipBlock = false;
+            }
+
+            if (inPeerBlock && trimmed.StartsWith("PublicKey", StringComparison.Ordinal))
+            {
+                var parts = trimmed.Split('=', 2, StringSplitOptions.TrimEntries);
+                if (parts.Length == 2 && string.Equals(parts[1], publicKey, StringComparison.Ordinal))
+                {
+                    skipBlock = true;
+                    if (newLines.Count > 0 && string.Equals(newLines[^1].Trim(), "[Peer]", StringComparison.Ordinal))
+                    {
+                        newLines.RemoveAt(newLines.Count - 1);
+                    }
+                    continue;
+                }
+            }
+
+            if (inPeerBlock && !string.IsNullOrWhiteSpace(address) && trimmed.StartsWith("AllowedIPs", StringComparison.Ordinal))
+            {
+                var parts = trimmed.Split('=', 2, StringSplitOptions.TrimEntries);
+                if (parts.Length == 2 && string.Equals(StripCidr(parts[1]), address, StringComparison.Ordinal))
+                {
+                    skipBlock = true;
+                    if (newLines.Count > 0 && string.Equals(newLines[^1].Trim(), "[Peer]", StringComparison.Ordinal))
+                    {
+                        newLines.RemoveAt(newLines.Count - 1);
+                    }
+                    continue;
+                }
+            }
+
+            if (skipBlock && inPeerBlock)
+            {
+                if (trimmed.Length == 0)
+                {
+                    skipBlock = false;
+                    inPeerBlock = false;
+                }
+                continue;
+            }
+
+            newLines.Add(line);
+        }
+
+        return NormalizeConfig(string.Join('\n', newLines));
+    }
+
+    private static string AppendPeerBlock(string config, string publicKey, string allowedIps, string? presharedKey)
+    {
+        var buffer = NormalizeConfig(config);
+        if (!buffer.EndsWith("\n\n", StringComparison.Ordinal))
+        {
+            buffer = buffer.TrimEnd('\n') + "\n\n";
+        }
+
+        buffer += "[Peer]\n";
+        buffer += $"PublicKey = {publicKey}\n";
+        if (!string.IsNullOrWhiteSpace(presharedKey))
+        {
+            buffer += $"PresharedKey = {presharedKey.Trim()}\n";
+        }
+        buffer += $"AllowedIPs = {allowedIps}\n";
+
+        return NormalizeConfig(buffer);
+    }
+
+    private static string NormalizeConfig(string config)
+    {
+        var normalized = config.Replace("\r\n", "\n").TrimEnd('\n');
+        return normalized + "\n";
     }
 
     private static double ParseCpuPercent(string statsOutput)

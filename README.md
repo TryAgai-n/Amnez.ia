@@ -8,12 +8,17 @@ Current scope:
 - background sync worker
 - local `amnezia-agent` for read-only AWG discovery and snapshots
 - import flow for existing `amnezia-awg*` runtimes
+- client lifecycle through `.NET API` and local agent:
+  - create client
+  - revoke / restore / delete
+  - download config
+  - QR code generation
 - temporary compatibility mode where the current PHP UI can be kept as frontend
 
 Planned next steps:
-- add mutate operations through jobs + agent
 - wire PHP UI pages to the new API
-- move client lifecycle operations from PHP into jobs + agent
+- add backups and restore flows
+- move long-running mutate operations into jobs where needed
 
 ## Local stack
 
@@ -66,4 +71,28 @@ Queue a live sync for an imported server:
 
 ```bash
 curl -X POST http://127.0.0.1:8083/api/servers/<server-id>/sync
+```
+
+Create a client:
+
+```bash
+curl -X POST http://127.0.0.1:8083/api/servers/<server-id>/clients \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "My Laptop",
+    "expiresInDays": 30
+  }'
+```
+
+Download a generated config:
+
+```bash
+curl -OJ http://127.0.0.1:8083/api/clients/<client-id>/download
+```
+
+Revoke or restore a client:
+
+```bash
+curl -X POST http://127.0.0.1:8083/api/clients/<client-id>/revoke
+curl -X POST http://127.0.0.1:8083/api/clients/<client-id>/restore
 ```

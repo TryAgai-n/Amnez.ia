@@ -16,8 +16,6 @@ public sealed class AmneziaAgentHttpClient(
 
     public async Task<IReadOnlyList<AgentRuntimeCandidate>> ListAwgRuntimesAsync(CancellationToken cancellationToken)
     {
-        ConfigureHttpClient();
-
         using var request = new HttpRequestMessage(HttpMethod.Get, "v1/runtimes/awgs");
         ApplyApiKey(request);
 
@@ -30,8 +28,6 @@ public sealed class AmneziaAgentHttpClient(
 
     public async Task<AgentServerSnapshot> DiscoverRuntimeAsync(AgentRuntimeDiscoveryRequest requestPayload, CancellationToken cancellationToken)
     {
-        ConfigureHttpClient();
-
         using var request = new HttpRequestMessage(HttpMethod.Post, "v1/runtime/discover")
         {
             Content = JsonContent.Create(requestPayload)
@@ -47,8 +43,6 @@ public sealed class AmneziaAgentHttpClient(
 
     public async Task<AgentServerSnapshot> GetServerSnapshotAsync(PanelServer server, CancellationToken cancellationToken)
     {
-        ConfigureHttpClient();
-
         using var request = new HttpRequestMessage(HttpMethod.Post, "v1/runtime/snapshot")
         {
             Content = JsonContent.Create(new AgentSnapshotRequest(
@@ -69,10 +63,75 @@ public sealed class AmneziaAgentHttpClient(
         return snapshot ?? throw new InvalidOperationException("Agent returned an empty snapshot payload.");
     }
 
-    private void ConfigureHttpClient()
+    public async Task<AgentClientMutationResult> CreateClientAsync(
+        PanelServer server,
+        string name,
+        string address,
+        string allowedIps,
+        string? presharedKey,
+        CancellationToken cancellationToken)
     {
-        _httpClient.BaseAddress = new Uri(_options.BaseUrl, UriKind.Absolute);
-        _httpClient.Timeout = TimeSpan.FromSeconds(Math.Max(1, _options.TimeoutSeconds));
+        using var request = new HttpRequestMessage(HttpMethod.Post, "v1/clients/create")
+        {
+            Content = JsonContent.Create(new AgentCreateClientRequest(
+                server.RuntimeType,
+                server.ContainerName,
+                name,
+                address,
+                allowedIps,
+                presharedKey))
+        };
+        ApplyApiKey(request);
+
+        using var response = await _httpClient.SendAsync(request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        var result = await response.Content.ReadFromJsonAsync<AgentClientMutationResult>(cancellationToken: cancellationToken);
+        return result ?? throw new InvalidOperationException("Agent returned an empty create-client payload.");
+    }
+
+    public async Task<AgentClientMutationResult> RestoreClientAsync(
+        PanelServer server,
+        string name,
+        string publicKey,
+        string address,
+        string allowedIps,
+        string? presharedKey,
+        CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, "v1/clients/restore")
+        {
+            Content = JsonContent.Create(new AgentRestoreClientRequest(
+                server.RuntimeType,
+                server.ContainerName,
+                name,
+                publicKey,
+                address,
+                allowedIps,
+                presharedKey))
+        };
+        ApplyApiKey(request);
+
+        using var response = await _httpClient.SendAsync(request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        var result = await response.Content.ReadFromJsonAsync<AgentClientMutationResult>(cancellationToken: cancellationToken);
+        return result ?? throw new InvalidOperationException("Agent returned an empty restore-client payload.");
+    }
+
+    public async Task RemoveClientAsync(PanelServer server, string publicKey, CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, "v1/clients/remove")
+        {
+            Content = JsonContent.Create(new AgentRemoveClientRequest(
+                server.RuntimeType,
+                server.ContainerName,
+                publicKey))
+        };
+        ApplyApiKey(request);
+
+        using var response = await _httpClient.SendAsync(request, cancellationToken);
+        response.EnsureSuccessStatusCode();
     }
 
     private void ApplyApiKey(HttpRequestMessage request)

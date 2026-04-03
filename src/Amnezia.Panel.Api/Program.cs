@@ -16,9 +16,15 @@ var connectionString = builder.Configuration.GetConnectionString("PanelDatabase"
 
 builder.Services.AddDbContext<PanelDbContext>(options => options.UseNpgsql(connectionString));
 
-builder.Services.AddHttpClient<IAmneziaAgentClient, AmneziaAgentHttpClient>();
+builder.Services.AddHttpClient<IAmneziaAgentClient, AmneziaAgentHttpClient>((serviceProvider, httpClient) =>
+{
+    var agentOptions = serviceProvider.GetRequiredService<Microsoft.Extensions.Options.IOptions<AgentOptions>>().Value;
+    httpClient.BaseAddress = new Uri(agentOptions.BaseUrl, UriKind.Absolute);
+    httpClient.Timeout = TimeSpan.FromSeconds(Math.Max(1, agentOptions.TimeoutSeconds));
+});
 builder.Services.AddScoped<ServerSyncService>();
 builder.Services.AddScoped<ServerImportService>();
+builder.Services.AddScoped<ClientLifecycleService>();
 builder.Services.AddScoped<JobService>();
 builder.Services.AddHostedService<MetricsSyncBackgroundService>();
 builder.Services.AddProblemDetails();
@@ -53,6 +59,7 @@ app.MapGet("/health/ready", async (PanelDbContext db, CancellationToken cancella
 .WithName("ReadyHealth");
 
 app.MapServerEndpoints();
+app.MapClientEndpoints();
 app.MapJobEndpoints();
 
 app.Run();

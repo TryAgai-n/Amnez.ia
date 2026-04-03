@@ -10,7 +10,17 @@ public sealed class VpnClient
 
     public string Address { get; set; } = string.Empty;
 
+    public string AllowedIps { get; set; } = string.Empty;
+
     public string PublicKey { get; set; } = string.Empty;
+
+    public string? PrivateKey { get; set; }
+
+    public string? PresharedKey { get; set; }
+
+    public string? Config { get; set; }
+
+    public string? QrCodeDataUri { get; set; }
 
     public ClientStatus Status { get; set; } = ClientStatus.Unknown;
 
@@ -21,6 +31,12 @@ public sealed class VpnClient
     public DateTime? LastHandshakeAt { get; set; }
 
     public DateTime? LastSyncedAt { get; set; }
+
+    public DateTime? ExpiresAt { get; set; }
+
+    public long? TrafficLimitBytes { get; set; }
+
+    public DateTime? RevokedAt { get; set; }
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 

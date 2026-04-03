@@ -121,12 +121,15 @@ public static class ServerEndpoints
                     x.Id,
                     x.Name,
                     x.Address,
+                    x.AllowedIps,
                     x.PublicKey,
                     x.Status.ToString(),
                     x.BytesSent,
                     x.BytesReceived,
                     x.LastHandshakeAt,
-                    x.LastSyncedAt))
+                    x.LastSyncedAt,
+                    !string.IsNullOrWhiteSpace(x.Config),
+                    !string.IsNullOrWhiteSpace(x.QrCodeDataUri)))
                 .ToListAsync(cancellationToken);
 
             return Results.Ok(clients);
@@ -220,12 +223,15 @@ public static class ServerEndpoints
         Guid Id,
         string Name,
         string Address,
+        string AllowedIps,
         string PublicKey,
         string Status,
         long BytesSent,
         long BytesReceived,
         DateTime? LastHandshakeAt,
-        DateTime? LastSyncedAt);
+        DateTime? LastSyncedAt,
+        bool HasConfig,
+        bool HasQrCode);
 
     public sealed record JobAcceptedResponse(Guid JobId, string Status, Guid? ServerId);
 }
