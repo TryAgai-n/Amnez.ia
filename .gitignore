@@ -1,0 +1,16 @@
+bin/
+obj/
+.vs/
+.vscode/
+
+*.user
+*.suo
+*.nupkg
+
+TestResults/
+artifacts/
+
+appsettings.Local.json
+appsettings.*.local.json
+
+.idea/
